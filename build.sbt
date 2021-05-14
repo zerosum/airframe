@@ -3,14 +3,14 @@ import xerial.sbt.pack.PackPlugin.publishPackArchiveTgz
 
 val SCALA_2_12          = "2.12.13"
 val SCALA_2_13          = "2.13.5"
-val SCALA_3_0           = "3.0.0-RC3"
+val SCALA_3_0           = "3.0.0"
 val targetScalaVersions = SCALA_2_13 :: SCALA_2_12 :: Nil
 val withDotty           = SCALA_3_0 :: targetScalaVersions
 
 val AIRSPEC_VERSION                 = "21.4.1"
 val SCALACHECK_VERSION              = "1.15.4"
-val MSGPACK_VERSION                 = "0.8.22"
-val SCALA_PARSER_COMBINATOR_VERSION = "1.2.0-RC2"
+val MSGPACK_VERSION                 = "0.8.23"
+val SCALA_PARSER_COMBINATOR_VERSION = "2.0.0"
 val SQLITE_JDBC_VERSION             = "3.34.0"
 val SLF4J_VERSION                   = "1.7.30"
 val JS_JAVA_LOGGING_VERSION         = "1.0.0"
@@ -19,7 +19,7 @@ val SCALAJS_DOM_VERSION             = "1.1.0"
 val FINAGLE_VERSION                 = "21.4.0"
 val FLUENCY_VERSION                 = "2.5.1"
 val GRPC_VERSION                    = "1.37.0"
-val JMH_VERSION                     = "1.30"
+val JMH_VERSION                     = "1.31"
 val JAVAX_ANNOTATION_API_VERSION    = "1.3.2"
 val PARQUET_VERSION                 = "1.12.0"
 
@@ -112,7 +112,7 @@ val buildSettings = Seq[Setting[_]](
     if (DOTTY)
       Seq.empty
     else
-      Seq("org.scala-lang.modules" %%% "scala-collection-compat" % "2.4.3")
+      Seq("org.scala-lang.modules" %%% "scala-collection-compat" % "2.4.4")
   }
 )
 
@@ -174,6 +174,7 @@ lazy val communityBuildProjects: Seq[ProjectReference] = Seq(
   msgpackJVM,
   rxJVM,
   httpJVM,
+  httpCodeGen,
   grpc,
   jsonJVM,
   rxHtmlJVM,
@@ -253,7 +254,7 @@ lazy val projectDotty =
       canvas,
       controlJVM,
       // codec uses Scala reflection
-      //codecJVM,
+      codecJVM,
       //fluentd,
       //httpJVM,
       //// Finagle isn't supporting Scala 3
@@ -375,14 +376,6 @@ def dottyCrossBuildSettings(prefix: String): Seq[Setting[_]] = {
           Seq[sbt.File](file(s"${(baseDirectory.value.getParentFile / prefix).toString}/src/test/scala-3"))
         case _ =>
           (Test / unmanagedSourceDirectories).value
-      }
-    },
-    libraryDependencies ++= {
-      scalaBinaryVersion.value match {
-        case v if v.startsWith("3.") =>
-          Seq.empty
-        case _ =>
-          Seq("org.scala-lang" % "scala-reflect" % scalaVersion.value)
       }
     }
   )
@@ -624,6 +617,7 @@ lazy val codec =
     .crossType(CrossType.Pure)
     .in(file("airframe-codec"))
     .settings(buildSettings)
+    .settings(dottyCrossBuildSettings("."))
     .settings(
       name := "airframe-codec",
       description := "Airframe MessagePack-based codec"
@@ -687,6 +681,7 @@ lazy val http =
     .enablePlugins(BuildInfoPlugin)
     .in(file("airframe-http"))
     .settings(buildSettings)
+    .settings(dottyCrossBuildSettings("."))
     .settings(
       name := "airframe-http",
       description := "REST and RPC Framework",
@@ -699,7 +694,7 @@ lazy val http =
           case Some((2, major)) if major <= 12 =>
             Seq()
           case _ =>
-            Seq("org.scala-lang.modules" %% "scala-parallel-collections" % "1.0.2")
+            Seq("org.scala-lang.modules" %% "scala-parallel-collections" % "1.0.3")
         }
       }
     )
@@ -713,21 +708,27 @@ lazy val http =
     .dependsOn(airframe, rx, control, surface, json, codec)
 
 lazy val httpJVM = http.jvm
-  .enablePlugins(PackPlugin)
-  .settings(
-    packMain := Map("airframe-http-code-generator" -> "wvlet.airframe.http.codegen.HttpCodeGenerator"),
-    packExcludeLibJars := Seq("airspec_2.12", "airspec_2.13"),
-    publishPackArchiveTgz,
-    libraryDependencies ++= Seq(
-      // Use swagger-parser only for validating YAML format in tests
-      "io.swagger.parser.v3" % "swagger-parser" % "2.0.25" % Test,
-      // Swagger includes dependency to SLF4J, so redirect slf4j logs to airframe-log
-      "org.slf4j" % "slf4j-jdk14" % SLF4J_VERSION % Test
-    )
-  )
-  .dependsOn(launcher)
+lazy val httpJS  = http.js
 
-lazy val httpJS = http.js
+lazy val httpCodeGen =
+  project
+    .in(file("airframe-http-codegen"))
+    .enablePlugins(PackPlugin)
+    .settings(buildSettings)
+    .settings(
+      name := "airframe-http-codegen",
+      description := "REST and RPC code generator",
+      packMain := Map("airframe-http-code-generator" -> "wvlet.airframe.http.codegen.HttpCodeGenerator"),
+      packExcludeLibJars := Seq("airspec_2.12", "airspec_2.13"),
+      libraryDependencies ++= Seq(
+        // Use swagger-parser only for validating YAML format in tests
+        "io.swagger.parser.v3" % "swagger-parser" % "2.0.25" % Test,
+        // Swagger includes dependency to SLF4J, so redirect slf4j logs to airframe-log
+        "org.slf4j" % "slf4j-jdk14" % SLF4J_VERSION % Test
+      ),
+      publishPackArchiveTgz
+    )
+    .dependsOn(httpJVM, launcher)
 
 lazy val grpc =
   project
@@ -744,6 +745,9 @@ lazy val grpc =
       )
     )
     .dependsOn(httpJVM, rxJVM)
+
+// Workaround for com.twitter:util-core_2.12:21.4.0 (depends on 1.1.2)
+ThisBuild / libraryDependencySchemes += "org.scala-lang.modules" %% "scala-parser-combinators" % "always"
 
 lazy val finagle =
   project
@@ -842,7 +846,7 @@ lazy val benchmark =
         // "com.thesamet.scalapb" %% "scalapb-runtime-grpc" % scalapb.compiler.Version.scalapbVersion
         // For grpc-java
         "io.grpc"             % "grpc-protobuf" % GRPC_VERSION,
-        "com.google.protobuf" % "protobuf-java" % "3.16.0",
+        "com.google.protobuf" % "protobuf-java" % "3.17.0",
         "com.chatwork"       %% "scala-ulid"    % "1.0.7"
       )
       //      Compile / PB.targets := Seq(
@@ -851,7 +855,7 @@ lazy val benchmark =
       // publishing .tgz
       // publishPackArchiveTgz
     )
-    .dependsOn(msgpackJVM, jsonJVM, metricsJVM, launcher, finagle, grpc, ulidJVM)
+    .dependsOn(msgpackJVM, jsonJVM, metricsJVM, launcher, httpCodeGen, finagle, grpc, ulidJVM)
 
 lazy val fluentd =
   project
@@ -1008,14 +1012,14 @@ lazy val sbtAirframe =
       scriptedDependencies := {
         // Publish all dependencies necessary for running the scripted tests
         val depPublish = scriptedDependencies.value
-        val p1         = (httpJVM / packArchiveTgz / publishLocal).value
+        val p1         = (httpCodeGen / packArchiveTgz / publishLocal).value
         val p2         = publishLocal.all(ScopeFilter(inDependencies(finagle))).value
         val p3         = publishLocal.all(ScopeFilter(inDependencies(grpc))).value
         val p4         = publishLocal.all(ScopeFilter(inDependencies(httpJS))).value
       },
       scriptedBufferLog := false
     )
-    .dependsOn(controlJVM, codecJVM, logJVM, httpJVM % Test)
+    .dependsOn(controlJVM, codecJVM, logJVM, httpCodeGen % Test)
 
 // Dotty test project
 lazy val dottyTest =
@@ -1031,7 +1035,7 @@ lazy val dottyTest =
         else targetScalaVersions
       }
     )
-    .dependsOn(logJVM, surfaceJVM, airframeJVM)
+    .dependsOn(logJVM, surfaceJVM, airframeJVM, codecJVM)
 
 /**
   * AirSpec build definitions.
